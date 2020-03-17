@@ -14,6 +14,7 @@ import torch.optim as optim
 
 dir_path = '/Users/brianmccrindle/Documents/736/galaxy-zoo-the-galaxy-challenge'
 os.chdir(dir_path) #change to this working directory 
+classes = ('Smooth','Disk','Artifact')
 
 #imgIDs = torch.load(dir_path +'/IDs.pt')
 
@@ -78,7 +79,7 @@ class convNet(nn.Module):
 		if self.input is None:
 			#input shape to the fully connected layer
 			self.input = x[0].shape[0]*x[0].shape[1]*x[0].shape[2]
-			print(self.input)
+			#print(self.input)
 		return x
 
 	def forward(self,x):
@@ -111,17 +112,22 @@ print(model)
 def trainModel(model):
 	#we need to place the optimizer and criterion in the function if we
 	#want to run the model on the GPU. 
-	EPOCHS = 1 #for now 
+	EPOCHS = 5 #for now 
+	batchLoss = []
+	batchIndex = []
+
 	optimizer = optim.SGD(model.parameters(), lr = 0.001, momentum = 0.90)
 	criterion = nn.CrossEntropyLoss() #this might not work?
 	for epoch in range(EPOCHS):
 		for batch_idx, (data, target) in enumerate(dataLoaderTrain):
+
+			#for GPU use
+			data.to(device)
+			target.to(device)
 			print(batch_idx)
-			#need to put these on the GPU if avaliable 
-			#print(data.to(device))
-			#print(target.to(device))
 
 			#This is a bit of a hack but whatever
+			#need to rearrange the labels to match what dataloader expects
 			labels = []
 			for j in range(0,len(target)):
 				labels.append(np.eye(3)[target[j].item()])
@@ -129,25 +135,65 @@ def trainModel(model):
 			labels = torch.Tensor(labels) #need to convert the labels into a tensor
 
 			model.zero_grad()
-			output = model(data)
+			output = model(data) #data.size() = [64,1,191,191]
 			#return output, data, labels
 			loss = criterion(output,target)
 			loss.backward()
 			optimizer.step()
-			print(f"Epoch Loss: {loss}")
+
+			batchLoss.append(loss)
+			batchIndex.append(batch_idx)
+
+			print(f"Batch Loss: {loss}")
 	print(f"Epoch: {epoch}. Loss: {loss}")
+	return batchLoss, batchIndex
 
-#output,data,labels = trainModel(model)
+TRAIN = False
+if TRAIN == True:
+	batchLoss, batchIndex = trainModel(model)
+	#Depending on the use case, we can either save the entire model (arch + weights)
+	#or just the weights. The line below is for saving ONLY the weights.
+	#This lets us call the untrained model when we want. 
+	torch.save(model.state_dict(), dir_path + '/trained_model_weights.pt') 
+	print('saved model weights')
 
-def testModel(model):
-	correct = 0
-	total = 0
-	with torch.no_grad():
-		for batch_idx, (data, target) in enumerate(dataLoaderTest):
-			return data,target
+TEST = True
+if TEST == True:
+	testModelNet = convNet().to(device)
+	testModelNet.load_state_dict(torch.load(dir_path + '/trained_model_weights.pt'))
+	print('Loaded Weights into testModelNet')
 
+	def testModel(testModelNet):
+		#record the number of correct classifications
+		class_correct = list(0. for i in range(3))
+		class_total = list(0. for i in range(3))
+		with torch.no_grad():
+			for batch_idx, (testData, target) in enumerate(dataLoaderTest):
+				#for GPU use
+				testData.to(device)
+				target.to(device)
 
-data,target = testModel(model)
+				output = testModelNet(testData)
+				_, predicted = torch.max(output.data,1)
+				print(predicted)
+				print(target)
+				results = (predicted == target).squeeze() #might not need sqeeze
+
+				print(f'batch_idx: {batch_idx}')
+				for ii in range(0,len(target)): #should always be 64
+					label = target[ii]
+					#below is a smart way of adding if TRUE or not if FALSE
+					class_correct[label] += results[ii].item()
+					class_total[label] += 1
+				print(f'Class Correct Array: {class_correct}')
+				print(f'Class Total Array: {class_total}')
+
+		for ii in range(3):
+			print(classes[ii], 100 * class_correct[ii] / class_total[ii])
+
+		return class_correct, class_total
+
+	class_correct, class_total =  testModel(model)
 
 
 
